@@ -13,9 +13,11 @@ const PS_CSS_SELECTORS = {
   PRIVATE_SESSION_INDICATOR: "button.main-actionButtons-button",
   MAIN_MENU: "div.main-topBar-topbarContentRight > button.main-userWidget-box",
   MENU_ITEM_LABEL: "span",
-  MENU_ITEM_BUTTON: "ul > li > button.main-contextMenu-menuItemButton[role='menuitemcheckbox']",
+  // Updated to be more flexible with menu item detection
+  MENU_ITEM_BUTTON: "button[role='menuitemcheckbox'], button[role='menuitem']",
   MENU_ITEM_CHECKED: "svg",
-  PROFILE_DROPDOWN_MENU: "ul.main-contextMenu-menu" // Added for observer
+  // Try multiple possible menu container selectors
+  PROFILE_DROPDOWN_MENU: "ul.main-contextMenu-menu, [role='menu'], ul[role='menu']"
 };
 const PS_PERSISTENT_ITEM_ID = "ps-persistent-item"; // Unique ID for our item
 
@@ -31,8 +33,8 @@ let initialCheckComplete = false; // Track if we've done the initial check
 let menuCloseTimer = null; // Timer for closing the menu
 
 /**
- * Attempts to find DOM element(s) using the provided selector
- * @param {string} selector - CSS selector to find the element(s)
+ * Attempts to find DOM element(s) using the provided selector(s)
+ * @param {string} selector - CSS selector(s) to find the element(s), comma-separated for multiple
  * @param {boolean} multiple - Whether to return multiple elements
  * @returns {Promise<Element|Element[]|null>} The found element(s) or null if not found
  */
@@ -172,7 +174,7 @@ function ensureMenuClosed() {
     menuCloseTimer = null;
   }
   
-  const openMenu = document.querySelector("ul.main-contextMenu-menu");
+  const openMenu = document.querySelector(PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU);
   if (openMenu) {
     console.debug('Private-Session: Closing open menu');
     const menuButton = document.querySelector(PS_CSS_SELECTORS.MAIN_MENU);
@@ -181,7 +183,7 @@ function ensureMenuClosed() {
       
       // Double-check after a shorter delay
       menuCloseTimer = setTimeout(() => {
-        const menuStillOpen = document.querySelector("ul.main-contextMenu-menu");
+        const menuStillOpen = document.querySelector(PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU);
         if (menuStillOpen) {
           console.debug('Private-Session: Menu still open, clicking again');
           menuButton.click();
@@ -586,11 +588,13 @@ function updateMenuItems() {
   }
 }
 
+
 /**
  * Sets up a mutation observer to watch for menu opening/closing
  */
 function setupMenuObserver() {
   console.log("[Private-Session] Setting up menu observer");
+  console.log("[Private-Session] Watching for menu selectors:", PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU);
   
   const observer = new MutationObserver((mutations) => {
     let menuAppeared = false;
@@ -603,9 +607,17 @@ function setupMenuObserver() {
             for (const node of mutation.addedNodes) {
                 // Check if the node itself is the menu or contains it
                 if (node.nodeType === 1) {
-                     const menuList = node.matches?.(PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU) 
-                                     ? node 
-                                     : node.querySelector?.(PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU);
+                    // Try each selector pattern for the dropdown menu
+                    const selectors = PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU.split(', ');
+                    let menuList = null;
+                    
+                    for (const selector of selectors) {
+                        menuList = node.matches?.(selector.trim()) 
+                                  ? node 
+                                  : node.querySelector?.(selector.trim());
+                        if (menuList) break;
+                    }
+                    
                     if (menuList) {
                         console.log("[Private-Session] Detected menu appearance");
                         menuAppeared = true;
@@ -621,7 +633,16 @@ function setupMenuObserver() {
             for (const node of mutation.removedNodes) {
                  if (node.nodeType === 1) {
                     // Check if the removed node *is* the menu or *contains* our item
-                    const isMenu = node.matches?.(PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU);
+                    const selectors = PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU.split(', ');
+                    let isMenu = false;
+                    
+                    for (const selector of selectors) {
+                        if (node.matches?.(selector.trim())) {
+                            isMenu = true;
+                            break;
+                        }
+                    }
+                    
                     const containsItem = node.querySelector?.(`#${PS_PERSISTENT_ITEM_ID}`); 
                     if (isMenu || containsItem) {
                          console.log("[Private-Session] Detected menu removal");
@@ -696,6 +717,7 @@ async function initializePrivateSession() {
   
   // Set up DOM-based menu handling
   setupMenuObserver();
+  
   
   // Check initial private session state without opening menu
   await isPrivateSessionActive();

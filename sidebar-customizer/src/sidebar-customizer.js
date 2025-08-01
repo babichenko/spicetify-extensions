@@ -51,7 +51,8 @@
         },
         PROFILE: {
             BUTTON: ".main-userWidget-box",
-            DROPDOWN_MENU: ".main-contextMenu-menu",
+            // Updated to include multiple fallback selectors for better compatibility
+            DROPDOWN_MENU: "ul.main-contextMenu-menu, [role='menu'], ul[role='menu']",
             SUBMENU_ID: "sidebar-submenu",
             SUBMENU_ITEM_CLASS: "main-contextMenu-menuItem",
             SUBMENU_BUTTON_CLASS: "main-contextMenu-menuItemButton",
@@ -435,6 +436,7 @@
         }
     }
 
+
     // --- Event Handlers & Observers ---
     function setupEventListeners() {
         // Single observer for NPV and menu
@@ -467,8 +469,19 @@
                 }
             }
             
-            // Check for profile menu opening
-            const profileMenu = document.querySelector(SELECTORS.PROFILE.DROPDOWN_MENU);
+            // Check for profile menu opening with multiple selector support
+            const selectors = SELECTORS.PROFILE.DROPDOWN_MENU.split(', ');
+            let profileMenu = null;
+            
+            // Try each selector pattern
+            for (const selector of selectors) {
+                profileMenu = document.querySelector(selector.trim());
+                if (profileMenu) {
+                    console.log(`[SidebarCustomizer] Found menu using selector: "${selector.trim()}"`);
+                    break;
+                }
+            }
+            
             if (profileMenu) {
                 console.log('[SidebarCustomizer] Found a menu:', profileMenu);
                 // Only add submenu if this is the profile menu (check for 'Settings' item)
@@ -484,6 +497,8 @@
                     } else {
                         console.log('[SidebarCustomizer] Custom submenu already present');
                     }
+                } else {
+                    console.log('[SidebarCustomizer] This appears to be a context menu, not profile menu');
                 }
             }
         });
@@ -496,13 +511,35 @@
         });
         console.log('[SidebarCustomizer] Mutation observer is now observing');
         
-        // Setup profile menu button listener
+        // Setup profile menu button listener with enhanced selector support
         utils.dom.getElement(SELECTORS.PROFILE.BUTTON).then(button => {
             button.addEventListener('click', () => {
                 setTimeout(() => {
-                    const menu = document.querySelector(SELECTORS.PROFILE.DROPDOWN_MENU);
+                    // Try multiple selectors to find the menu
+                    const selectors = SELECTORS.PROFILE.DROPDOWN_MENU.split(', ');
+                    let menu = null;
+                    
+                    for (const selector of selectors) {
+                        menu = document.querySelector(selector.trim());
+                        if (menu) {
+                            console.log(`[SidebarCustomizer] Profile button click - found menu using: "${selector.trim()}"`);
+                            break;
+                        }
+                    }
+                    
                     if (menu && !menu.querySelector(`#${SELECTORS.PROFILE.SUBMENU_ID}`)) {
-                        addCustomSubMenu(menu, utils.prefs.load());
+                        // Verify this is the profile menu by checking for Settings
+                        const menuItems = Array.from(menu.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]'));
+                        const hasSettings = menuItems.some(item => item.textContent?.trim() === 'Settings');
+                        
+                        if (hasSettings) {
+                            console.log('[SidebarCustomizer] Adding submenu via profile button click');
+                            addCustomSubMenu(menu, utils.prefs.load());
+                        } else {
+                            console.log('[SidebarCustomizer] Profile button click - menu found but no Settings item');
+                        }
+                    } else if (!menu) {
+                        console.log('[SidebarCustomizer] Profile button click - no menu found');
                     }
                 }, 150);
             });
@@ -534,6 +571,8 @@
     async function init() {
         try {
             console.log('[SidebarCustomizer] init() called');
+            console.log('[SidebarCustomizer] Watching for menu selectors:', SELECTORS.PROFILE.DROPDOWN_MENU);
+            
             // Wait for Spicetify
             let attempts = 0;
             while (!(window.Spicetify && Spicetify.Platform && Spicetify.Platform.History) && 
@@ -546,6 +585,7 @@
             utils.dom.createOrUpdateStyle();
             applyPreferences();
             setupEventListeners();
+            
             
             console.log("SidebarCustomizer: Initialized");
         } catch (error) {
