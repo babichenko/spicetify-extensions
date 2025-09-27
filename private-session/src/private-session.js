@@ -6,12 +6,13 @@ const PS_PERSISTENT_SESSION_LABEL_TEXT = "Persistent Privacy";
 const PS_RETRY_LIMIT = 3;
 const PS_INDICATOR_RETRIES = 2;  // PS indicator check attempts
 const PS_DELAY_MS = 100;
-const PS_SPICETIFY_LAST_LOADED_API = "FeedbackAPI"; // This is the last API that Sp[o|ice]tify loads
-const MENU_OPERATION_COOLDOWN = 500; 
+const MENU_OPERATION_COOLDOWN = 500;
 // CSS/DOM selectors
 const PS_CSS_SELECTORS = {
-  PRIVATE_SESSION_INDICATOR: "button.main-actionButtons-button",
-  MAIN_MENU: "div.main-topBar-topbarContentRight > button.main-userWidget-box",
+  // Look for private session indicator container and search within it
+  PRIVATE_SESSION_INDICATOR_CONTAINER: ".Root__globalNav > div:last-child",
+  // Updated main menu selector to be more flexible and match current Spotify UI
+  MAIN_MENU: "button.main-userWidget-box, button[data-testid='user-widget-avatar'], .main-userWidget-box button, [data-testid='user-widget-dropdown'], button.main-avatar-button",
   MENU_ITEM_LABEL: "span",
   // Updated to be more flexible with menu item detection
   MENU_ITEM_BUTTON: "button[role='menuitemcheckbox'], button[role='menuitem']",
@@ -28,8 +29,6 @@ let menuItemAdded = false; // Track if we've added our menu item to the CURRENTL
 let menuOperationInProgress = false;
 let lastMenuOperationTime = 0;
 let pendingFocusCheck = false; // Track if we have a pending focus check
-let cachedPrivateSessionState = false; // Track the last known private session state
-let initialCheckComplete = false; // Track if we've done the initial check
 let menuCloseTimer = null; // Timer for closing the menu
 
 /**
@@ -41,7 +40,7 @@ let menuCloseTimer = null; // Timer for closing the menu
 async function getElement(selector, multiple) {
   for (let retryCount = 0; retryCount < PS_RETRY_LIMIT; retryCount++) {
     console.debug(`Private-Session: Searching for "${selector}" - attempt ${retryCount + 1}`);
-    
+
     if (multiple) {
       const elements = document.querySelectorAll(selector);
       if (elements.length > 0) {
@@ -60,27 +59,13 @@ async function getElement(selector, multiple) {
   return null;
 }
 
-/**
- * Clicks an element found by selector and returns the element
- * @param {string} selector - CSS selector for the element to click
- * @returns {Promise<Element|null>} The clicked element or null if not found
- */
-async function clickElementBySelector(selector) {
-  const element = await getElement(selector, false);
-  if (!element) {
-    console.warn(`Private-Session: Cannot click non-existent element "${selector}"`);
-    return null;
-  }
-  element.click();
-  return element;
-}
 
 /**
  * Checks if a menu item button is currently selected
  * @param {Element} button - The menu item button element to check
- * @returns {Promise<boolean>} Whether the button is selected
+ * @returns {boolean} Whether the button is selected
  */
-async function isMenuItemSelected(button) {
+function isMenuItemSelected(button) {
   return !!button.querySelector(PS_CSS_SELECTORS.MENU_ITEM_CHECKED);
 }
 
@@ -92,23 +77,33 @@ async function isMenuItemSelected(button) {
 async function findMenuItemButton(labelText) {
   for (let retryCount = 0; retryCount < PS_RETRY_LIMIT; retryCount++) {
     console.debug(`Private-Session: Looking for menu item "${labelText}" - attempt ${retryCount + 1}`);
-    
-    const menuItems = document.querySelectorAll(PS_CSS_SELECTORS.MENU_ITEM_BUTTON);
-    if (menuItems.length > 0) {
-      for (const button of menuItems) {
-        const label = button.querySelector(PS_CSS_SELECTORS.MENU_ITEM_LABEL);
-        if (label && label.textContent.trim() === labelText) {
-          console.debug(`Private-Session: Found menu item "${labelText}"`);
-          return button;
-        }
-      }
-    }
-    
+
+    const button = searchForMenuItemButton(labelText);
+    if (button) return button;
+
     await new Promise(resolve => setTimeout(resolve, PS_DELAY_MS));
   }
-  
+
   console.warn(`Private-Session: Menu item "${labelText}" not found after ${PS_RETRY_LIMIT} attempts`);
   return null;
+}
+
+function searchForMenuItemButton(labelText) {
+  const menuItems = document.querySelectorAll(PS_CSS_SELECTORS.MENU_ITEM_BUTTON);
+  if (menuItems.length === 0) return null;
+
+  for (const button of menuItems) {
+    if (isMenuItemWithLabel(button, labelText)) {
+      console.debug(`Private-Session: Found menu item "${labelText}"`);
+      return button;
+    }
+  }
+  return null;
+}
+
+function isMenuItemWithLabel(button, labelText) {
+  const label = button.querySelector(PS_CSS_SELECTORS.MENU_ITEM_LABEL);
+  return label && label.textContent.trim() === labelText;
 }
 
 /**
@@ -118,19 +113,38 @@ async function findMenuItemButton(labelText) {
 async function findPrivateSessionIndicator() {
   for (let retryCount = 0; retryCount < PS_INDICATOR_RETRIES; retryCount++) {
     console.debug(`Private-Session: Looking for private session indicator - attempt ${retryCount + 1}`);
-    
-    const buttons = document.querySelectorAll(PS_CSS_SELECTORS.PRIVATE_SESSION_INDICATOR);
-    for (const button of buttons) {
-      if (button.textContent.includes(PS_PRIVATE_SESSION_LABEL_TEXT)) {
-        console.debug('Private-Session: Found private session indicator');
-        return button;
-      }
-    }
-    
+
+    const indicator = searchForPrivateSessionIndicator();
+    if (indicator) return indicator;
+
     await new Promise(resolve => setTimeout(resolve, PS_DELAY_MS));
   }
-  
-  console.debug('Private-Session: No private session indicator found');
+
+  console.log('Private-Session: ❌ NO PRIVATE SESSION INDICATOR FOUND after all attempts');
+  return null;
+}
+
+function searchForPrivateSessionIndicator() {
+  const container = document.querySelector(PS_CSS_SELECTORS.PRIVATE_SESSION_INDICATOR_CONTAINER);
+  if (!container) {
+    console.debug(`Private-Session: Container not found`);
+    return null;
+  }
+
+  console.debug(`Private-Session: Found container, searching for buttons within it`);
+  return findPrivateSessionButtonInContainer(container);
+}
+
+function findPrivateSessionButtonInContainer(container) {
+  const buttons = container.querySelectorAll('button, * button, * * button, * * * button');
+  console.log(`Private-Session: Found ${buttons.length} buttons in container`);
+
+  for (const button of buttons) {
+    if (button.textContent.includes(PS_PRIVATE_SESSION_LABEL_TEXT)) {
+      console.debug('Private-Session: ✅ Found private session indicator');
+      return button;
+    }
+  }
   return null;
 }
 
@@ -139,8 +153,7 @@ async function findPrivateSessionIndicator() {
  */
 function savePersistentModeSetting() {
   localStorage.setItem("private-session-persistent-mode", persistentModeEnabled.toString());
-  console.log(`Private-Session: Saved persistent mode setting to localStorage: ${persistentModeEnabled}`);
-  console.log(`Private-Session: Current localStorage value: ${localStorage.getItem("private-session-persistent-mode")}`);
+  console.debug(`Private-Session: Saved persistent mode setting: ${persistentModeEnabled}`);
 }
 
 /**
@@ -148,10 +161,8 @@ function savePersistentModeSetting() {
  */
 function loadPersistentModeSetting() {
   const savedSetting = localStorage.getItem("private-session-persistent-mode");
-  // Default to false if no setting is found
   persistentModeEnabled = savedSetting === "true";
-  console.log(`Private-Session: Loaded persistent mode setting from localStorage: ${persistentModeEnabled}`);
-  console.log(`Private-Session: Raw localStorage value: ${savedSetting}`);
+  console.debug(`Private-Session: Loaded persistent mode setting: ${persistentModeEnabled}`);
 }
 
 /**
@@ -160,8 +171,9 @@ function loadPersistentModeSetting() {
  */
 async function isPrivateSessionActive() {
   const indicator = await findPrivateSessionIndicator();
-  cachedPrivateSessionState = !!indicator;
-  return cachedPrivateSessionState;
+  const isActive = !!indicator;
+  console.debug(`Private-Session: isPrivateSessionActive - found indicator: ${isActive}`);
+  return isActive;
 }
 
 /**
@@ -173,14 +185,14 @@ function ensureMenuClosed() {
     clearTimeout(menuCloseTimer);
     menuCloseTimer = null;
   }
-  
+
   const openMenu = document.querySelector(PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU);
   if (openMenu) {
     console.debug('Private-Session: Closing open menu');
     const menuButton = document.querySelector(PS_CSS_SELECTORS.MAIN_MENU);
     if (menuButton) {
       menuButton.click();
-      
+
       // Double-check after a shorter delay
       menuCloseTimer = setTimeout(() => {
         const menuStillOpen = document.querySelector(PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU);
@@ -195,97 +207,115 @@ function ensureMenuClosed() {
 }
 
 /**
+ * Validates if a menu operation can proceed
+ */
+function canPerformMenuOperation() {
+  if (menuOperationInProgress) {
+    console.debug('Private-Session: Menu operation already in progress, skipping');
+    return false;
+  }
+
+  const now = Date.now();
+  if (now - lastMenuOperationTime < MENU_OPERATION_COOLDOWN) {
+    console.debug('Private-Session: Menu operation cooldown active, skipping');
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Opens the main menu and waits for it to render
+ */
+async function openMainMenu() {
+  ensureMenuClosed();
+  await new Promise(resolve => setTimeout(resolve, 150));
+
+  const menu = await getElement(PS_CSS_SELECTORS.MAIN_MENU, false);
+  if (!menu) {
+    throw new Error('Failed to find menu button');
+  }
+
+  menu.click();
+  await new Promise(resolve => setTimeout(resolve, PS_DELAY_MS * 2));
+  return menu;
+}
+
+/**
+ * Finds and activates the private session menu item
+ */
+async function activatePrivateSessionMenuItem() {
+  const privateSessionMenuItem = await findMenuItemButton(PS_PRIVATE_SESSION_LABEL_TEXT);
+  if (!privateSessionMenuItem) {
+    throw new Error(`${PS_PRIVATE_SESSION_LABEL_TEXT} menu item not found`);
+  }
+
+  if (!isMenuItemSelected(privateSessionMenuItem)) {
+    console.debug('Private-Session: Clicking private session menu item');
+    privateSessionMenuItem.click();
+    await new Promise(resolve => setTimeout(resolve, PS_DELAY_MS));
+  } else {
+    console.debug('Private-Session: Private session already enabled in menu');
+  }
+
+  return true;
+}
+
+/**
+ * Cleanup function for menu operations
+ */
+function cleanupMenuOperation() {
+  ensureMenuClosed();
+  menuOperationInProgress = false;
+}
+
+/**
  * Starts a private session if not already active
  * @param {boolean} [forceOpen=true] - Whether to force open the menu if needed
  * @returns {Promise<boolean>} Whether the private session was successfully enabled
  */
 async function startPrivateSession(forceOpen = true) {
   console.debug(`Private-Session: Starting with forceOpen=${forceOpen}...`);
-  
-  // Prevent multiple concurrent menu operations
-  if (menuOperationInProgress) {
-    console.debug('Private-Session: Menu operation already in progress, skipping');
+
+  if (!canPerformMenuOperation()) {
     return false;
   }
-  
-  // Check if we've recently performed a menu operation
-  const now = Date.now();
-  if (now - lastMenuOperationTime < MENU_OPERATION_COOLDOWN) {
-    console.debug('Private-Session: Menu operation cooldown active, skipping');
-    return false;
-  }
-  
+
   try {
-    // First check if private session is already active without opening menu
     const isActive = await isPrivateSessionActive();
     if (isActive) {
       console.debug('Private-Session: Already in private session');
       return true;
     }
-    
-    // Only continue if forceOpen is true
-    if (!forceOpen) {
-      console.debug('Private-Session: Not in private session, but forceOpen is false');
-      return false;
-    }
-    
-    // Set operation flag and update timestamp
-    menuOperationInProgress = true;
-    lastMenuOperationTime = now;
-    
-    console.debug('Private-Session: Need to enable private session, opening menu once');
-    
-    // Ensure any existing menu is closed first
-    ensureMenuClosed();
-    
-    // Wait a bit to ensure menu is closed - reduced delay
-    await new Promise(resolve => setTimeout(resolve, 150)); // Reduced from 300
-    
-    // Open the menu
-    const menu = await clickElementBySelector(PS_CSS_SELECTORS.MAIN_MENU);
-    if (!menu) {
-      console.error('Private-Session: Failed to click menu button');
-      menuOperationInProgress = false;
-      return false;
-    }
-    
-    // Wait for menu to open and render - optimized delay
-    await new Promise(resolve => setTimeout(resolve, PS_DELAY_MS * 2)); // Reduced from PS_DELAY_MS * 3
-    
-    // Find and click the private session menu item
-    const privateSessionMenuItem = await findMenuItemButton(PS_PRIVATE_SESSION_LABEL_TEXT);
-    if (!privateSessionMenuItem) {
-      console.error(`Private-Session: ${PS_PRIVATE_SESSION_LABEL_TEXT} menu item not found`);
-      ensureMenuClosed();
-      menuOperationInProgress = false;
-      return false;
-    }
-    
-    // Toggle private session if needed
-    if (await isMenuItemSelected(privateSessionMenuItem)) {
-      console.debug('Private-Session: Private session already enabled in menu');
-      cachedPrivateSessionState = true;
-    } else {
-      console.debug('Private-Session: Clicking private session menu item');
-      privateSessionMenuItem.click();
-      cachedPrivateSessionState = true;
-      
-      // Wait a bit for the click to take effect - optimized delay
-      await new Promise(resolve => setTimeout(resolve, PS_DELAY_MS)); // Reduced from PS_DELAY_MS * 2
-    }
-    
-    // Close the menu
-    ensureMenuClosed();
-    
-    // Reset operation flag
-    menuOperationInProgress = false;
-    return true;
+
+    return await handlePrivateSessionActivation(forceOpen);
+
   } catch (error) {
     console.error('Private-Session: Error in startPrivateSession', error);
-    ensureMenuClosed();
-    menuOperationInProgress = false;
+    cleanupMenuOperation();
     return false;
   }
+}
+
+async function handlePrivateSessionActivation(forceOpen) {
+  if (!forceOpen) {
+    console.debug('Private-Session: Not in private session, but forceOpen is false');
+    return false;
+  }
+
+  prepareMenuOperation();
+  console.debug('Private-Session: Need to enable private session, opening menu');
+
+  await openMainMenu();
+  await activatePrivateSessionMenuItem();
+
+  cleanupMenuOperation();
+  return true;
+}
+
+function prepareMenuOperation() {
+  menuOperationInProgress = true;
+  lastMenuOperationTime = Date.now();
 }
 
 /**
@@ -294,38 +324,52 @@ async function startPrivateSession(forceOpen = true) {
 function enablePersistentMode() {
   persistentModeEnabled = true;
   savePersistentModeSetting();
-  
+
   // Add focus event listener if not already added
   if (!focusEventListener) {
     focusEventListener = () => {
       console.debug('Private-Session: Window focused - scheduling private session check');
-      
+
       // Don't check immediately, schedule it for later to avoid conflicts
       if (!pendingFocusCheck) {
         pendingFocusCheck = true;
-        
+
         // Wait a bit before checking - optimized delay
         setTimeout(async () => {
           console.debug('Private-Session: Performing delayed focus check');
           pendingFocusCheck = false;
-          
+
+          // Skip check if conditions not met
+          const openMenu = document.querySelector(PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU);
+          if (!persistentModeEnabled || menuOperationInProgress || openMenu) {
+            console.debug('Private-Session: Skipping focus check - conditions not met');
+            return;
+          }
+
           // Check if private session is active without opening menu
           const isActive = await isPrivateSessionActive();
-          
+          console.debug(`Private-Session: Focus check - Private session active: ${isActive}, Persistent mode enabled: ${persistentModeEnabled}`);
+
+          // Only act if private session is NOT active and persistent mode is enabled
           if (!isActive && persistentModeEnabled) {
-            console.debug('Private-Session: Private session not active after focus, enabling');
+            console.debug('Private-Session: Private session not active after focus, enabling via menu');
             await startPrivateSession(true);
           } else {
-            console.debug('Private-Session: Private session already active after focus or persistent mode disabled');
+            console.debug('Private-Session: Private session already active, no action needed');
           }
-        }, 500); // Reduced from 1000
+        }, 500); // Reduced delay for faster response when needed
       } else {
         console.debug('Private-Session: Focus check already pending, skipping');
       }
     };
     window.addEventListener('focus', focusEventListener);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && persistentModeEnabled && !menuOperationInProgress) {
+        focusEventListener();
+      }
+    });
   }
-  
+
   console.debug('Private-Session: Persistent mode enabled');
 }
 
@@ -363,38 +407,39 @@ function createToggleSwitch(isEnabled) {
  * @param {Element} [menuItemElement] - Optional: The specific menu item element to update.
  */
 function updatePersistentMenuItemState(menuItemElement) {
-  let targetItem = menuItemElement;
+  const targetItem = findTargetMenuItem(menuItemElement);
+  if (!targetItem) return;
 
-  // If no specific element provided, try to find it by ID (fallback)
-  if (!targetItem) {
-    const menuList = document.querySelector(PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU);
-    if (menuList) {
-        targetItem = menuList.querySelector(`#${PS_PERSISTENT_ITEM_ID}`);
-    }
-  }
+  const button = targetItem.querySelector("button");
+  if (!button) return;
 
-  if (targetItem) {
-    const button = targetItem.querySelector("button");
-    if (button) {
-        console.debug("Private-Session: Updating persistent privacy item state");
-        
-        // Create a container for the toggle switch
-        let toggleContainer = button.querySelector('.sidebar-checkbox');
-        if (!toggleContainer) {
-            toggleContainer = document.createElement('span');
-            toggleContainer.className = 'sidebar-checkbox';
-            toggleContainer.style.cssText = "width:40px;height:20px;display:flex;align-items:center;justify-content:center;";
-            button.appendChild(toggleContainer);
-        }
-        
-        // Update the toggle switch
-        toggleContainer.innerHTML = createToggleSwitch(persistentModeEnabled);
-        toggleContainer.title = persistentModeEnabled ? "Click to disable persistent privacy mode" : "Click to enable persistent privacy mode";
-        console.debug("Private-Session: Updated toggle switch to ", persistentModeEnabled ? "enabled" : "disabled");
-    }
-  } else {
-      // console.warn("Private-Session: Could not find persistent menu item to update state.");
+  console.debug("Private-Session: Updating persistent privacy item state");
+  updateToggleContainer(button);
+}
+
+function findTargetMenuItem(menuItemElement) {
+  if (menuItemElement) return menuItemElement;
+
+  const menuList = document.querySelector(PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU);
+  return menuList ? menuList.querySelector(`#${PS_PERSISTENT_ITEM_ID}`) : null;
+}
+
+function updateToggleContainer(button) {
+  const toggleContainer = ensureToggleContainer(button);
+  toggleContainer.innerHTML = createToggleSwitch(persistentModeEnabled);
+  toggleContainer.title = persistentModeEnabled ? "Click to disable persistent privacy mode" : "Click to enable persistent privacy mode";
+  console.debug("Private-Session: Updated toggle switch to ", persistentModeEnabled ? "enabled" : "disabled");
+}
+
+function ensureToggleContainer(button) {
+  let toggleContainer = button.querySelector('.sidebar-checkbox');
+  if (!toggleContainer) {
+    toggleContainer = document.createElement('span');
+    toggleContainer.className = 'sidebar-checkbox';
+    toggleContainer.style.cssText = "width:40px;height:20px;display:flex;align-items:center;justify-content:center;";
+    button.appendChild(toggleContainer);
   }
+  return toggleContainer;
 }
 
 /**
@@ -403,13 +448,13 @@ function updatePersistentMenuItemState(menuItemElement) {
 function disablePersistentMode() {
   persistentModeEnabled = false;
   savePersistentModeSetting();
-  
+
   // Remove focus event listener if it exists
   if (focusEventListener) {
     window.removeEventListener('focus', focusEventListener);
     focusEventListener = null;
   }
-  
+
   console.debug('Private-Session: Persistent mode disabled');
 }
 
@@ -417,14 +462,10 @@ function disablePersistentMode() {
  * Toggles the persistent private session mode
  */
 function togglePersistentMode() {
-  console.log(`Private-Session: Toggle triggered - changing from ${persistentModeEnabled} to ${!persistentModeEnabled}`);
   persistentModeEnabled = !persistentModeEnabled;
+  console.debug(`Private-Session: Toggled persistent mode to: ${persistentModeEnabled}`);
   savePersistentModeSetting();
-  
-  // Log the value after toggling
-  console.log(`Private-Session: After toggle - persistentModeEnabled = ${persistentModeEnabled}`);
-  console.log(`Private-Session: After toggle - localStorage value = ${localStorage.getItem("private-session-persistent-mode")}`);
-  
+
   if (persistentModeEnabled) {
     enablePersistentMode();
   } else {
@@ -453,10 +494,20 @@ function findItemByText(menuList, text) {
  * @param {Element} menuList - The menu list element
  */
 function addPersistentPrivacyItem(menuList, retryCount = 0) {
+  const privateSessionItem = findPrivateSessionItem(menuList, retryCount);
+  if (!privateSessionItem) return null;
+
+  const menuItem = createPersistentMenuItem(privateSessionItem);
+  privateSessionItem.after(menuItem);
+
+  console.log("[Private-Session] Added persistent privacy item after Private session");
+  return menuItem;
+}
+
+function findPrivateSessionItem(menuList, retryCount) {
   const MAX_RETRIES = 10;
   const RETRY_DELAY = 100;
 
-  // Find the Private session item to get its position
   const privateSessionSpan = Array.from(menuList.querySelectorAll("span"))
     .find(span => span.textContent === PS_PRIVATE_SESSION_LABEL_TEXT);
 
@@ -475,53 +526,66 @@ function addPersistentPrivacyItem(menuList, retryCount = 0) {
     console.warn("[Private-Session] Could not find Private session list item");
     return null;
   }
-  
-  // Create our own menu item as an <li> to match Spotify's structure
+
+  return privateSessionItem;
+}
+
+function createPersistentMenuItem(privateSessionItem) {
   const menuItem = document.createElement("li");
   menuItem.id = PS_PERSISTENT_ITEM_ID;
-  menuItem.className = privateSessionItem.className; // Copy the class for styling
+  menuItem.className = privateSessionItem.className;
 
-  // Create a button similar to Spotify's menu items but with a custom role
+  const button = createMenuButton();
+  menuItem.appendChild(button);
+
+  return menuItem;
+}
+
+function createMenuButton() {
   const button = document.createElement("div");
   button.className = "main-contextMenu-menuItemButton";
   button.style.cssText = "display:flex;align-items:center;padding:8px 12px;cursor:pointer;justify-content:space-between;";
-  // Use menuitem role instead of menuitemcheckbox to prevent Spotify's automatic behavior
   button.setAttribute("role", "menuitem");
-  
-  // Create the label
+
   const label = document.createElement("span");
   label.textContent = PS_PERSISTENT_SESSION_LABEL_TEXT;
-  
-  // Create the toggle container
+
+  const toggle = createToggleElement();
+
+  button.appendChild(label);
+  button.appendChild(toggle);
+
+  addButtonEventListeners(button, toggle);
+
+  return button;
+}
+
+function createToggleElement() {
   const toggle = document.createElement("span");
   toggle.className = "sidebar-checkbox";
   toggle.style.cssText = "width:40px;height:20px;display:flex;align-items:center;justify-content:center;";
   toggle.innerHTML = createToggleSwitch(persistentModeEnabled);
   toggle.title = persistentModeEnabled ? "Click to disable persistent privacy mode" : "Click to enable persistent privacy mode";
-  
-  // Add elements to the button
-  button.appendChild(label);
-  button.appendChild(toggle);
-  
-  // Add hover effects
-  button.addEventListener("mouseover", () => button.style.backgroundColor = "rgba(255,255,255,0.1)");
-  button.addEventListener("mouseout", () => button.style.backgroundColor = "transparent");
-  
-  // Add click handler
-  button.addEventListener("click", () => {
+  return toggle;
+}
+
+function addButtonEventListeners(button, toggle) {
+  button.addEventListener("mouseover", (event) => {
+    event.stopPropagation();
+    button.style.backgroundColor = "rgba(255,255,255,0.1)";
+  });
+
+  button.addEventListener("mouseout", (event) => {
+    event.stopPropagation();
+    button.style.backgroundColor = "transparent";
+  });
+
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
     togglePersistentMode();
     toggle.innerHTML = createToggleSwitch(persistentModeEnabled);
     toggle.title = persistentModeEnabled ? "Click to disable persistent privacy mode" : "Click to enable persistent privacy mode";
   });
-  
-  // Add the button to the menu item
-  menuItem.appendChild(button);
-
-  // Insert after the Private session item
-  privateSessionItem.after(menuItem);
-
-  console.log("[Private-Session] Added persistent privacy item after Private session");
-  return menuItem;
 }
 
 /**
@@ -530,64 +594,168 @@ function addPersistentPrivacyItem(menuList, retryCount = 0) {
  * @param {Element} menuList - The menu list element (ul.main-contextMenu-menu).
  */
 function ensurePersistentMenuItem(menuList) {
-    if (!menuList) return;
+  if (!menuList) return;
 
-    // First check if this is a profile menu by looking for Private session item
-    const privateSessionButton = findItemByText(menuList, PS_PRIVATE_SESSION_LABEL_TEXT);
-    if (!privateSessionButton) {
-        console.log("[Private-Session] This is not a profile menu (no Private session item)");
-        return;
-    }
+  // First check if this is a profile menu by looking for Private session item
+  const privateSessionButton = findItemByText(menuList, PS_PRIVATE_SESSION_LABEL_TEXT);
+  if (!privateSessionButton) {
+    console.log("[Private-Session] This is not a profile menu (no Private session item)");
+    return;
+  }
 
-    let persistentItem = menuList.querySelector(`#${PS_PERSISTENT_ITEM_ID}`);
-    
-    if (persistentItem) {
-        // Item exists, just update its state
-        updatePersistentMenuItemState(persistentItem);
-    } else {
-        // Item doesn't exist, add it
-        persistentItem = addPersistentPrivacyItem(menuList);
-    }
-    
-    // If persistent mode is enabled, ensure private session is active
-    // Only do this check when the menu is interacted with to add/update our item
-    if (persistentModeEnabled && persistentItem) { // Check persistentItem exists
-        findPrivateSessionIndicator().then(indicator => {
-            if (!indicator) {
-                console.debug("Private-Session: Private session not active, enabling via current menu");
-                const privateSessionButton = findItemByText(menuList, PS_PRIVATE_SESSION_LABEL_TEXT);
-                // Check if the private session is active by checking for the indicator directly
-                // rather than looking for SVG elements in the menu
-                if (privateSessionButton && !indicator) {
-                    privateSessionButton.click();
-                }
-            }
-        });
-    }
+  let persistentItem = menuList.querySelector(`#${PS_PERSISTENT_ITEM_ID}`);
+
+  if (persistentItem) {
+    // Item exists, just update its state
+    updatePersistentMenuItemState(persistentItem);
+  } else {
+    // Item doesn't exist, add it
+    persistentItem = addPersistentPrivacyItem(menuList);
+  }
+}
+
+
+/**
+ * Helper function to find menu list in a node using multiple selectors
+ */
+function findMenuInNode(node) {
+  const selectors = PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU.split(', ');
+  for (const selector of selectors) {
+    const menuList = (node.matches && node.matches(selector.trim()))
+      ? node
+      : (node.querySelector && node.querySelector(selector.trim()));
+    if (menuList) return menuList;
+  }
+  return null;
 }
 
 /**
- * Updates all menu items to reflect current state - DEPRECATED for primary use
- * Primarily used now for fallback or explicit refresh.
+ * Helper function to check if a node is a menu using multiple selectors
  */
-function updateMenuItems() {
-  const menuList = document.querySelector(PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU);
-  if (!menuList) {
-    console.warn("Private-Session: Menu not found when updating items");
+function isMenuNode(node) {
+  const selectors = PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU.split(', ');
+  return selectors.some(selector => node.matches && node.matches(selector.trim()));
+}
+
+/**
+ * Processes added nodes to detect menu appearance
+ */
+function processAddedNodes(addedNodes) {
+  for (const node of addedNodes) {
+    if (node.nodeType === 1) {
+      const menuList = findMenuInNode(node);
+      if (menuList) {
+        console.log("[Private-Session] Detected menu appearance");
+        return { appeared: true, menuList };
+      }
+    }
+  }
+  return { appeared: false, menuList: null };
+}
+
+/**
+ * Processes removed nodes to detect menu disappearance
+ */
+function processRemovedNodes(removedNodes) {
+  for (const node of removedNodes) {
+    if (node.nodeType === 1) {
+      const isMenu = isMenuNode(node);
+      const containsItem = node.querySelector && node.querySelector(`#${PS_PERSISTENT_ITEM_ID}`);
+      if (isMenu || containsItem) {
+        console.log("[Private-Session] Detected menu removal");
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Checks if a menu is the profile menu
+ */
+function isProfileMenu(menuList) {
+  const privateSessionSpan = Array.from(menuList.querySelectorAll("span"))
+    .find(span => span.textContent === PS_PRIVATE_SESSION_LABEL_TEXT);
+
+  const hasSettingsItem = Array.from(menuList.querySelectorAll("span"))
+    .some(span => span.textContent === "Settings");
+
+  return privateSessionSpan || hasSettingsItem;
+}
+
+/**
+ * Handles menu appearance events
+ */
+function handleMenuAppearance(menuList) {
+  if (!isProfileMenu(menuList)) {
+    console.log("[Private-Session] This appears to be a context menu, not adding our item");
     return;
   }
-  
-  // Find our persistent privacy item by ID and update it
-  const persistentItem = menuList.querySelector(`#${PS_PERSISTENT_ITEM_ID}`);
-  if (persistentItem) {
-      updatePersistentMenuItemState(persistentItem);
+
+  console.log("[Private-Session] Profile menu detected");
+  const privateSessionSpan = Array.from(menuList.querySelectorAll("span"))
+    .find(span => span.textContent === PS_PRIVATE_SESSION_LABEL_TEXT);
+
+  if (privateSessionSpan) {
+    console.log("[Private-Session] Ensuring persistent menu item");
+    ensurePersistentMenuItem(menuList);
+    menuItemAdded = true;
+    lastMenuOperationTime = Date.now();
   } else {
-      // Optional: Could add it here as a fallback, but observer should handle it
-      console.warn("Private-Session: updateMenuItems called but item not found (should be added by observer).");
-      //addPersistentPrivacyItem(menuList); 
+    console.log("[Private-Session] Profile menu found but no Private session item");
   }
 }
 
+/**
+ * Handles menu disappearance events
+ */
+function handleMenuDisappearance() {
+  console.log("[Private-Session] Resetting menuItemAdded flag");
+  menuItemAdded = false;
+}
+
+/**
+ * Handles mutation events for menu detection
+ */
+function handleMutations(mutations) {
+  const menuState = analyzeMutations(mutations);
+  handleMenuStateChanges(menuState);
+}
+
+function analyzeMutations(mutations) {
+  let menuAppeared = false;
+  let menuDisappeared = false;
+  let detectedMenuList = null;
+
+  for (const mutation of mutations) {
+    if (!menuItemAdded && mutation.addedNodes) {
+      const result = processAddedNodes(mutation.addedNodes);
+      if (result.appeared) {
+        menuAppeared = true;
+        detectedMenuList = result.menuList;
+        break;
+      }
+    }
+
+    if (menuItemAdded && mutation.removedNodes) {
+      if (processRemovedNodes(mutation.removedNodes)) {
+        menuDisappeared = true;
+        break;
+      }
+    }
+  }
+
+  return { menuAppeared, menuDisappeared, detectedMenuList };
+}
+
+function handleMenuStateChanges({ menuAppeared, menuDisappeared, detectedMenuList }) {
+  if (menuDisappeared) {
+    handleMenuDisappearance();
+  }
+  if (menuAppeared && detectedMenuList && !menuItemAdded) {
+    handleMenuAppearance(detectedMenuList);
+  }
+}
 
 /**
  * Sets up a mutation observer to watch for menu opening/closing
@@ -595,101 +763,9 @@ function updateMenuItems() {
 function setupMenuObserver() {
   console.log("[Private-Session] Setting up menu observer");
   console.log("[Private-Session] Watching for menu selectors:", PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU);
-  
-  const observer = new MutationObserver((mutations) => {
-    let menuAppeared = false;
-    let menuDisappeared = false;
-    let detectedMenuList = null;
 
-    for (const mutation of mutations) {
-        // Check for added nodes (Menu Appearance)
-        if (!menuItemAdded && mutation.addedNodes) {
-            for (const node of mutation.addedNodes) {
-                // Check if the node itself is the menu or contains it
-                if (node.nodeType === 1) {
-                    // Try each selector pattern for the dropdown menu
-                    const selectors = PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU.split(', ');
-                    let menuList = null;
-                    
-                    for (const selector of selectors) {
-                        menuList = node.matches?.(selector.trim()) 
-                                  ? node 
-                                  : node.querySelector?.(selector.trim());
-                        if (menuList) break;
-                    }
-                    
-                    if (menuList) {
-                        console.log("[Private-Session] Detected menu appearance");
-                        menuAppeared = true;
-                        detectedMenuList = menuList;
-                        break; 
-                    }
-                }
-            }
-        }
+  const observer = new MutationObserver(handleMutations);
 
-        // Check for removed nodes (Menu Disappearance)
-        if (menuItemAdded && mutation.removedNodes) {
-            for (const node of mutation.removedNodes) {
-                 if (node.nodeType === 1) {
-                    // Check if the removed node *is* the menu or *contains* our item
-                    const selectors = PS_CSS_SELECTORS.PROFILE_DROPDOWN_MENU.split(', ');
-                    let isMenu = false;
-                    
-                    for (const selector of selectors) {
-                        if (node.matches?.(selector.trim())) {
-                            isMenu = true;
-                            break;
-                        }
-                    }
-                    
-                    const containsItem = node.querySelector?.(`#${PS_PERSISTENT_ITEM_ID}`); 
-                    if (isMenu || containsItem) {
-                         console.log("[Private-Session] Detected menu removal");
-                        menuDisappeared = true;
-                        break;
-                    }
-                 }
-            }
-        }
-        if (menuAppeared || menuDisappeared) break; // Optimization
-    }
-
-    // Handle Menu Removal
-    if (menuDisappeared) {
-        console.log("[Private-Session] Resetting menuItemAdded flag");
-        menuItemAdded = false;
-    }
-
-    // Handle Menu Appearance
-    if (menuAppeared && detectedMenuList && !menuItemAdded) {
-        // Check if this is the profile menu by looking for "Private session" item
-        // We only want to add our item to the profile menu, not to context menus
-        const privateSessionSpan = Array.from(detectedMenuList.querySelectorAll("span"))
-          .find(span => span.textContent === PS_PRIVATE_SESSION_LABEL_TEXT);
-        
-        // Also check for Settings menu item which only appears in profile menu
-        const hasSettingsItem = Array.from(detectedMenuList.querySelectorAll("span"))
-          .some(span => span.textContent === "Settings");
-            
-        if (privateSessionSpan || hasSettingsItem) {
-            console.log("[Private-Session] Profile menu detected (anchor or Settings found)");
-            // This is the profile menu (not a context menu), now check for Private session item
-            if (privateSessionSpan) {
-                console.log("[Private-Session] Ensuring persistent menu item (anchor found)");
-                ensurePersistentMenuItem(detectedMenuList);
-                menuItemAdded = true;
-                lastMenuOperationTime = Date.now();
-            } else {
-                console.log("[Private-Session] Profile menu found but no Private session item");
-            }
-        } else {
-            console.log("[Private-Session] This appears to be a context menu, not adding our item");
-        }
-    }
-  });
-  
-  // Start observing the body for added/removed nodes
   observer.observe(document.body, { childList: true, subtree: true });
   console.log("[Private-Session] Mutation observer is now observing");
 }
@@ -711,41 +787,45 @@ const privateSessionMain = async (condition, callback) => {
  */
 async function initializePrivateSession() {
   console.debug("Private-Session: Initializing");
-  
+
   // Load saved settings first
   loadPersistentModeSetting();
-  
+
   // Set up DOM-based menu handling
   setupMenuObserver();
-  
-  
+
+
   // Check initial private session state without opening menu
   await isPrivateSessionActive();
-  initialCheckComplete = true;
-  
+
   // Set up persistent mode if enabled in saved settings
+  console.debug(`Private-Session: Checking persistent mode - enabled: ${persistentModeEnabled}`);
   if (persistentModeEnabled) {
+    console.debug('Private-Session: Enabling persistent mode from saved settings');
     enablePersistentMode();
+  } else {
+    console.debug('Private-Session: Persistent mode not enabled in saved settings');
   }
-  
+
   // Always start private session on initialization, regardless of persistent mode
   // Wait a bit before starting private session
   await new Promise(resolve => setTimeout(resolve, 800));
-  
-  // Check if private session is active
-  if (!cachedPrivateSessionState) {
+
+  // Check if private session is active and start if needed
+  const isActive = await isPrivateSessionActive();
+  if (!isActive) {
     console.debug("Private-Session: Initial private session activation needed");
     await startPrivateSession(true);
   } else {
     console.debug("Private-Session: Private session already active on initialization");
   }
-  
+
   console.debug("Private-Session: Initialization complete");
 }
 
 // Initialize when Spicetify is ready
 privateSessionMain(() => {
-  const ready = Spicetify && Spicetify.Platform && Spicetify.Platform[PS_SPICETIFY_LAST_LOADED_API] && document.readyState === 'complete';
+  const ready = Spicetify && Spicetify.Platform && document.readyState === 'complete';
   if (ready) {
     console.debug("Private-Session: Spicetify is ready");
   }
