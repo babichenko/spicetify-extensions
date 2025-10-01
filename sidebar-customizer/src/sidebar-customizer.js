@@ -10,6 +10,7 @@
         },
         DEFAULT_PREFS: {
             friendActivity: false,
+            whatsNew: false,
             queue: false,
             connect: false,
             nowPlaying: false,
@@ -21,6 +22,10 @@
     const SELECTORS = {
         FRIEND_ACTIVITY: {
             LABEL: "Friend Activity",
+            get SELECTOR() { return `[aria-label="${this.LABEL}"]`; }
+        },
+        WHATS_NEW: {
+            LABEL: "What's New",
             get SELECTOR() { return `[aria-label="${this.LABEL}"]`; }
         },
         QUEUE: {
@@ -221,7 +226,7 @@
                 }
                 
                 // Sidebar visibility
-                const shouldHideSidebar = !prefs.nowPlaying && !prefs.queue && !prefs.connect && !prefs.friendActivity;
+                const shouldHideSidebar = !prefs.nowPlaying && !prefs.queue && !prefs.connect && !prefs.friendActivity && !prefs.whatsNew;
                 if (shouldHideSidebar) {
                     cssContent += `
                         ${SELECTORS.LAYOUT.RIGHT_SIDEBAR} {
@@ -267,11 +272,15 @@
     // --- Element Control Functions ---
     function applyPreferences(prefs = null) {
         const currentPrefs = prefs || utils.prefs.load();
-        
+
         // Friend Activity
         const friendActivity = document.querySelector(SELECTORS.FRIEND_ACTIVITY.SELECTOR);
         if (friendActivity) friendActivity.style.display = currentPrefs.friendActivity ? '' : 'none';
-        
+
+        // What's New
+        const whatsNew = document.querySelector(SELECTORS.WHATS_NEW.SELECTOR);
+        if (whatsNew) whatsNew.style.display = currentPrefs.whatsNew ? '' : 'none';
+
         // Queue
         const queue = document.querySelector(SELECTORS.QUEUE.SELECTOR);
         if (queue) queue.style.display = currentPrefs.queue ? '' : 'none';
@@ -408,6 +417,7 @@
             
             const items = [
                 { name: SELECTORS.FRIEND_ACTIVITY.LABEL, pref: "friendActivity" },
+                { name: SELECTORS.WHATS_NEW.LABEL, pref: "whatsNew" },
                 { name: SELECTORS.QUEUE.LABEL, pref: "queue" },
                 { name: SELECTORS.CONNECT.LABEL, pref: "connect" },
                 { name: SELECTORS.NPV.TEXT_LABEL_ALT, pref: "nowPlaying" },
