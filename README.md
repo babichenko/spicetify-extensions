@@ -1,3 +1,10 @@
+# FORK INFO
+This is taken from bojanraic's Spicetify Extension for side-hide to alter for myself.
+The purpose of this personal project is to gain some skill in using Github
+(and get rid of that annoying video button)
+
+Original information below.
+
 # spicetify-extensions
 bojanraic's Spicetify Extensions
 
